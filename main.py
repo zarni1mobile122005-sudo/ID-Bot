@@ -72,30 +72,35 @@ async def start(message):
     await bot.reply_to(message, "Bot စတင်ပါပြီ။ /key ဖြင့်စတင်ပါ။")
 
 @bot.message_handler(commands=['key'])
+@bot.message_handler(commands=['key'])
 async def handle_key(message):
     global approve
-    key = str(message.chat.id)
+    chat_id_str = str(message.chat.id)
+
+    # Admin အတွက် Key စစ်ဆေးခြင်း ကျော်ဖြတ်ခြင်း
+    if chat_id_str == ADMIN_ID:
+        approve[message.chat.id] = True
+        user_data[message.chat.id] = {}
+        await bot.reply_to(message, "Admin အဖြစ် ဝင်ရောက်ထားပါသည်။ /input ဖြင့် Session URL ထည့်ပါ။")
+        return
+
+    # ပုံမှန် User များအတွက်မူ key စစ်ဆေးပါ
     auth_list, _ = await get_file_content("auth_list.json")
-    if key in auth_list:
-        valid = check_key_expiration(auth_list[key])
+    if chat_id_str in auth_list:
+        valid = check_key_expiration(auth_list[chat_id_str])
         if valid:
             approve[message.chat.id] = True
             user_data[message.chat.id] = {}
             await bot.reply_to(
                 message,
-                " Key မှန်ကန်ပါသည်။ /input ဖြင့် Session URL ထည့်ပါ။"
+                "Key မှန်ကန်ပါသည်။ /input ဖြင့် Session URL ထည့်ပါ။"
             )
         else:
             approve[message.chat.id] = False
-            await bot.reply_to(
-                message,
-                " Key Expired ဖြစ်နေပါသည်။"
-            )
+            await bot.reply_to(message, "Key Expired ဖြစ်နေပါသည်။")
     else:
-        await bot.reply_to(
-            message,
-            " သင်၏ key ကို registered မလုပ်ရသေးပါ။"
-        )
+        await bot.reply_to(message, "သင်၏ key ကို registered မလုပ်ရသေးပါ။")
+
 
 
 

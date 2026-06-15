@@ -11,7 +11,12 @@ BOT_TOKEN = '8826597987:AAGJZYfhu0cXrBnp6Ma7H0n0JsoTMUbO66E'
 GITHUB_TOKEN = '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'
 REPO_OWNER = "zarni1mobile122005-sudo"
 REPO_NAME = "ID-Bot"
-ADMIN_ID = "7592705124"
+# ကုဒ်တွင် ပြင်ဆင်ရန်
+ADMIN_ID = [7592705124, 8404894106]
+
+# အသုံးပြုသည့်နေရာတွင် စစ်ဆေးရန်
+if user_id in ADMIN_ID:
+    # Admin ဖြစ်ကြောင်း အတည်ပြုရန်
 ##################
 
 SUCCESS_CODE = asyncio.Queue()
@@ -69,7 +74,18 @@ async def update_file_content(path, content, sha, message):
 
 @bot.message_handler(commands=['start'])
 async def start(message):
-    await bot.reply_to(message, "Bot စတင်ပါပြီ။ /key ဖြင့်စတင်ပါ။")
+    welcome_text = (
+        "မင်္ဂလာပါ! ကျွန်ုပ်သည် ID-Bot ဖြစ်ပါသည်။\n\n"
+        "ကျွန်ုပ်၏ လုပ်ဆောင်ချက်များမှာ-\n"
+        "1. /key - သင်၏ Key ကို စစ်ဆေးရန်\n"
+        "2. /input - Session URL ထည့်သွင်းရန်\n"
+        "3. /scan - Code များ စတင်စစ်ဆေးရန်\n"
+        "4. /result - ရရှိထားသော Success Code များကြည့်ရန်\n"
+        "5. /recheck - Code များကို ပြန်လည်စစ်ဆေးရန်\n\n"
+        "အကူအညီလိုအပ်ပါက Admin ကို ဆက်သွယ်ပါ။"
+    )
+    await bot.reply_to(message, welcome_text)
+ပါ။")
 
 @bot.message_handler(commands=['key'])
 @bot.message_handler(commands=['key'])

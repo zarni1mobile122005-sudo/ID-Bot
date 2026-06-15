@@ -100,9 +100,26 @@ async def handle_key(message):
             await bot.reply_to(message, "Key Expired ဖြစ်နေပါသည်။")
     else:
         await bot.reply_to(message, "သင်၏ key ကို registered မလုပ်ရသေးပါ။")
+@bot.message_handler(commands=['help'])
+async def help_command(message):
+    help_text = """
+🤖 **Bot အသုံးပြုနိုင်သော Command များ:**
 
+၁။ `/start` - Bot ကို စတင်အသက်သွင်းရန်။
+၂။ `/key` - မိမိ၏ Key ကို စစ်ဆေးရန် (သို့) Admin အတွက် ခွင့်ပြုချက်ရယူရန်။
+၃။ `/input [Session URL]` - Scan လုပ်ရန် Session URL ကို ထည့်သွင်းသိမ်းဆည်းရန်။
+၄။ `/scan [Mode]` - ကုဒ်များကို စတင်စစ်ဆေးရန်။ (Mode: 6, 7, 8 သို့မဟုတ် all)
+၅။ `/stop` - လက်ရှိလုပ်ဆောင်နေသော Scan ကို ရပ်တန့်ရန်။
+၆။ `/result` - အောင်မြင်ထားသော Success Code များကို ကြည့်ရှုရန်။
+၇။ `/recheck` - ရရှိထားသော Code များကို ပြန်လည်စစ်ဆေးရန်။
 
-
+**Admin များအတွက်သာ:**
+၈။ `/genkey [Plan] [ID]` - Key အသစ်ထုတ်ပေးရန်။
+၉။ `/delkey [ID]` - Key ကို ဖျက်ပစ်ရန်။
+၁၀။ `/listkeys` - Register လုပ်ထားသော Key များအားလုံးကို ကြည့်ရန်။
+၁၁။ `/status` - Bot ၏ လက်ရှိအခြေအနေကို ကြည့်ရန်။
+    """
+    await bot.reply_to(message, help_text, parse_mode="Markdown")
 
 @bot.message_handler(commands=['listkeys'])
 async def listkeys(message):

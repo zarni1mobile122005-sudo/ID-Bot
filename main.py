@@ -284,23 +284,36 @@ def get_current_time():
 @bot.message_handler(commands=['recheck'])
 async def recheck(message):
     chat_id = message.chat.id
-    if not approve.get(chat_id, False):
-        await bot.reply_to(message, "/recheck ကိုအသုံးမပြုမီ /key ကိုအရင်ပြုလုပ်ပေးပါ။")
-        return
+    chat_id_str = str(chat_id)
+    
+    # Admin သို့မဟုတ် Key ရှိသူများကိုသာ ခွင့်ပြုရန်
     auth_list, _ = await get_file_content("auth_list.json")
-    if str(message.chat.id) in auth_list:
+    
+    # Admin ဖြစ်နေလျှင် သို့မဟုတ် auth_list ထဲတွင် ရှိနေလျှင်
+    if chat_id_str == ADMIN_ID or chat_id_str in auth_list:
+        # Admin ဖြစ်လျှင် approve ကို True လုပ်ပေးရန်
+        if chat_id_str == ADMIN_ID:
+            approve[chat_id] = True
+            if chat_id not in user_data:
+                user_data[chat_id] = {}
+        
+        # Approve ဖြစ်မဖြစ် စစ်ဆေးခြင်း
+        if not approve.get(chat_id, False):
+            await bot.reply_to(message, "/recheck ကိုအသုံးမပြုမီ /key ကိုအရင်ပြုလုပ်ပေးပါ။")
+            return
+            
         results, sha = await get_file_content("result.json")
-        chat_id_str = str(message.chat.id)
+        
         if chat_id_str in results and results[chat_id_str]:
-            if message.chat.id not in user_data:
-                await bot.reply_to(message, "/scan ကိုအသုံးမပြုမီ /key ကိုအရင်ပြုလုပ်ပေးပါ။")
-                return
-            if "session_url" not in user_data[message.chat.id]:
+            # Session URL မရှိပါက error ပြရန်
+            if "session_url" not in user_data.get(chat_id, {}):
                 await bot.reply_to(message, "/recheck ကိုအသုံးမပြုမီ /input ဖြင့် Session URL ကိုအရင်ထည့်သွင်းပေးရပါမည်။")
                 return
+            
             codes = results[chat_id_str]
             await bot.reply_to(message, f"Success Code များအား ပြန်လည်စစ်ဆေးနေပါသည်။")
-            session_url_recheck = user_data[message.chat.id]["session_url"]
+            
+            session_url_recheck = user_data[chat_id]["session_url"]
             recheck_list = []
             for code in codes:
                 recode = await perform_check(
@@ -313,6 +326,7 @@ async def recheck(message):
                 )
                 if recode:
                     recheck_list.append(recode)
+            
             to_show = "\n".join(recheck_list) if recheck_list else "Code များအားလုံးစစ်ဆေးပြီးပါပြီ မည်သည့် success code မျှရှာမတွေ့ပါ။"
             await bot.reply_to(message, f"✅ Rechcked Codes:\n\n{to_show}")
             await save_rechecked_codes(chat_id_str, recheck_list, sha)
@@ -320,6 +334,7 @@ async def recheck(message):
             await bot.reply_to(message, "သင့်တွင် success code တစ်ခုမျှမရှိသေးပါ။")
     else:
         await bot.reply_to(message, "သင်၏ key ကို registered မလုပ်ရသေးပါ။")
+
 
 async def save_rechecked_codes(chat_id_str, recheck_list, sha):
     results, _ = await get_file_content("result.json")

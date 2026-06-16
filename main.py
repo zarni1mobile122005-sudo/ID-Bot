@@ -32,20 +32,17 @@ _voucher_sem = None
 _start_time = time.monotonic()
 
 # ─── Authorized Users ──────────────────────────────────────────────────────
-# Admin ကနေ ခွင့်ပြုထားတဲ့ users တွေကို သိမ်းမယ်
 authorized_users = set()
-authorized_users.add(int(ADMIN_ID))  # Admin ကို auto authorize
+authorized_users.add(int(ADMIN_ID))
 
 # ─── Load Authorized Users from GitHub ────────────────────────────────────
 async def load_authorized_users():
-    """GitHub ကနေ authorized users စာရင်းကိုယူမယ်"""
     global authorized_users
     try:
         auth_list, _ = await get_file_content("authorized_users.json")
         if auth_list and "users" in auth_list:
             for uid in auth_list["users"]:
                 authorized_users.add(int(uid))
-        # Admin ကို အမြဲတမ်းထည့်ထားမယ်
         authorized_users.add(int(ADMIN_ID))
         print(f"Loaded {len(authorized_users)} authorized users from GitHub")
     except Exception as e:
@@ -53,14 +50,12 @@ async def load_authorized_users():
 
 # ─── Authorization Check ──────────────────────────────────────────────────
 def is_authorized(chat_id):
-    """User ကို သုံးခွင့်ရှိမရှိ စစ်တယ်"""
     return chat_id in authorized_users
 
 # ─── Main Menu Buttons ──────────────────────────────────────────────────────
 def main_menu(chat_id=None):
     keyboard = InlineKeyboardMarkup()
     
-    # User က authorized ဖြစ်မှသာ buttons ကိုပြမယ်
     if chat_id and is_authorized(chat_id):
         keyboard.row(
             InlineKeyboardButton("🔗 Input Session", callback_data="menu_input"),
@@ -75,7 +70,6 @@ def main_menu(chat_id=None):
             InlineKeyboardButton("❓ Help", callback_data="menu_help")
         )
     else:
-        # ခွင့်မပြုရင် admin ကိုဆက်သွယ်ခိုင်းတဲ့ button ပြမယ်
         keyboard.row(
             InlineKeyboardButton("👤 Contact Admin", url="https://t.me/mgzan201")
         )
@@ -195,10 +189,185 @@ def generate_expiry(plan):
         return "9999-12-31T23:59:59Z"
     return (now + plans[plan]).isoformat()
 
+# ════════════════════════════════════════════════════════════════════════
+# ─── DEBUG COMMANDS ──────────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════
+
+# ─── /testsession Command ────────────────────────────────────────────────
+@bot.message_handler(commands=['testsession'])
+async def test_session(message):
+    chat_id = message.chat.id
+    
+    if not is_authorized(chat_id):
+        await bot.reply_to(message, "❌ You are not authorized!")
+        return
+    
+    if chat_id not in user_data or 'session_url' not in user_data[chat_id]:
+        await bot.reply_to(message, "❌ Session URL မရှိသေးဘူး\n\nPlease use /input first")
+        return
+    
+    session_url = user_data[chat_id]['session_url']
+    await bot.reply_to(message, f"🔍 Testing session URL:\n`{session_url}`")
+    
+    result = await check_session_url(session_url)
+    if result:
+        await bot.reply_to(
+            message, 
+            "✅ **Session URL ကောင်းမွန်ပါတယ်**\n\n"
+            "You can now start scanning with /scan",
+            parse_mode="Markdown"
+        )
+    else:
+        await bot.reply_to(
+            message,
+            "❌ **Session URL မမှန်ပါဘူး**\n\n"
+            "ကျေးဇူးပြုပြီး session URL အသစ်ပြန်ယူပါ။\n"
+            "1. Browser ကနေ portal ကို login ဝင်ပါ\n"
+            "2. URL ကို copy ကူးပါ\n"
+            "3. /input နဲ့ ပြန်ထည့်ပါ",
+            parse_mode="Markdown"
+        )
+
+# ─── /testcaptcha Command ────────────────────────────────────────────────
+@bot.message_handler(commands=['testcaptcha'])
+async def test_captcha(message):
+    chat_id = message.chat.id
+    
+    if not is_authorized(chat_id):
+        await bot.reply_to(message, "❌ You are not authorized!")
+        return
+    
+    if chat_id not in user_data or 'session_url' not in user_data[chat_id]:
+        await bot.reply_to(message, "❌ Session URL မရှိသေးဘူး\n\nPlease use /input first")
+        return
+    
+    session_url = user_data[chat_id]['session_url']
+    await bot.reply_to(message, "🔄 Testing Captcha... Please wait...")
+    
+    try:
+        async with aiohttp.ClientSession() as test_session:
+            # Session ID ယူမယ်
+            session_id = await get_session_id(test_session, session_url, None)
+            if not session_id:
+                await bot.reply_to(message, "❌ **Session ID မရဘူး**\n\nSession URL မှားနေတယ်။ အသစ်ပြန်ယူပါ။")
+                return
+            
+            await bot.reply_to(message, f"✅ Session ID: `{session_id}`")
+            
+            # Captcha ပုံယူမယ်
+            image = await Captcha_Image(test_session, session_id)
+            if not image:
+                await bot.reply_to(message, "❌ **Captcha ပုံမရဘူး**")
+                return
+            
+            # Captcha ကို OCR နဲ့ဖတ်မယ်
+            text = await Captcha_Text(image)
+            if not text:
+                await bot.reply_to(message, "❌ **Captcha ကို မဖတ်နိုင်ဘူး**\n\nOCR အလုပ်မလုပ်ဘူး")
+                return
+            
+            await bot.reply_to(message, f"📝 **Captcha Text:** `{text}`")
+            
+            # Captcha စစ်ဆေးမယ်
+            verified = await Varify_Captcha(test_session, session_id, text)
+            if verified:
+                await bot.reply_to(
+                    message,
+                    "✅ **Captcha အောင်မြင်ပါတယ်**\n\n"
+                    "Everything is working fine!\n"
+                    "You can start scanning now.",
+                    parse_mode="Markdown"
+                )
+            else:
+                await bot.reply_to(
+                    message,
+                    f"❌ **Captcha မအောင်ပါဘူး**\n\n"
+                    f"Captcha Text: `{text}`\n"
+                    "တစ်ခါပြန်စမ်းကြည့်ပါ။",
+                    parse_mode="Markdown"
+                )
+    except Exception as e:
+        await bot.reply_to(message, f"❌ Error: `{str(e)}`")
+
+# ─── /testcode Command ──────────────────────────────────────────────────
+@bot.message_handler(commands=['testcode'])
+async def test_code(message):
+    args = message.text.split()
+    if len(args) < 2:
+        await bot.reply_to(
+            message,
+            "⚠️ **Usage:** `/testcode <code>`\n\n"
+            "Example: `/testcode 123456`",
+            parse_mode="Markdown"
+        )
+        return
+    
+    code = args[1]
+    chat_id = message.chat.id
+    
+    if not is_authorized(chat_id):
+        await bot.reply_to(message, "❌ You are not authorized!")
+        return
+    
+    if chat_id not in user_data or 'session_url' not in user_data[chat_id]:
+        await bot.reply_to(message, "❌ Session URL မရှိသေးဘူး\n\nPlease use /input first")
+        return
+    
+    session_url = user_data[chat_id]['session_url']
+    await bot.reply_to(message, f"🔍 Testing code: `{code}`\n\nPlease wait...", parse_mode="Markdown")
+    
+    try:
+        result = await perform_check(session_url, code, chat_id, scan_id=None, recheck=True, message=message)
+        if result:
+            await bot.reply_to(
+                message,
+                f"✅ **Code `{code}` ကောင်းမွန်ပါတယ်**\n\n"
+                "This code is working!",
+                parse_mode="Markdown"
+            )
+        else:
+            await bot.reply_to(
+                message,
+                f"❌ **Code `{code}` အလုပ်မလုပ်ပါဘူး**\n\n"
+                "Code is invalid or expired.",
+                parse_mode="Markdown"
+            )
+    except Exception as e:
+        await bot.reply_to(message, f"❌ Error: `{str(e)}`")
+
+# ─── /debug Command ──────────────────────────────────────────────────
+@bot.message_handler(commands=['debug'])
+async def debug_info(message):
+    chat_id = message.chat.id
+    
+    if not is_authorized(chat_id):
+        await bot.reply_to(message, "❌ You are not authorized!")
+        return
+    
+    info = []
+    info.append("📊 **Debug Information**")
+    info.append("")
+    info.append(f"👤 Chat ID: `{chat_id}`")
+    info.append(f"✅ Authorized: `{is_authorized(chat_id)}`")
+    info.append(f"🔑 Has Key: `{chat_id in approve}`")
+    info.append(f"📁 Has Session: `{chat_id in user_data and 'session_url' in user_data.get(chat_id, {})}`")
+    
+    if chat_id in user_data and 'session_url' in user_data[chat_id]:
+        session_url = user_data[chat_id]['session_url']
+        info.append(f"🔗 Session: `{session_url[:50]}...`")
+    
+    info.append(f"🔄 Scan Running: `{chat_id in scan_tasks and not scan_tasks.get(chat_id, {}).get('task', asyncio.Future()).done()}`")
+    info.append(f"📋 Codes Found: `{len(success_texts.get(chat_id, []))}`")
+    
+    await bot.reply_to(message, "\n".join(info), parse_mode="Markdown")
+
+# ════════════════════════════════════════════════════════════════════════
+# ─── END DEBUG COMMANDS ────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════
+
 # ─── /addmeb Command (Admin Only) ──────────────────────────────────────
 @bot.message_handler(commands=['addmeb'])
 async def add_user(message):
-    """Admin က user အသစ်ကို ခွင့်ပြုပေးတဲ့ command"""
     if str(message.chat.id) != ADMIN_ID:
         await bot.reply_to(message, "❌ No Permission")
         return
@@ -225,7 +394,6 @@ async def add_user(message):
         
         authorized_users.add(new_user_id)
         
-        # ခွင့်ပြုထားတဲ့ user ကို GitHub မှာလည်း သိမ်းမယ်
         auth_list, sha = await get_file_content("authorized_users.json")
         if not auth_list:
             auth_list = {"users": []}
@@ -246,7 +414,6 @@ async def add_user(message):
             parse_mode="Markdown"
         )
         
-        # ခွင့်ပြုခံရတဲ့ user ကို notification ပို့မယ်
         try:
             await bot.send_message(
                 new_user_id,
@@ -269,7 +436,6 @@ async def add_user(message):
 # ─── /removeuser Command (Admin Only) ──────────────────────────────────
 @bot.message_handler(commands=['removeuser'])
 async def remove_user(message):
-    """Admin က user ကို ခွင့်မပြုတော့ဘူးဆိုတဲ့ command"""
     if str(message.chat.id) != ADMIN_ID:
         await bot.reply_to(message, "❌ No Permission")
         return
@@ -304,7 +470,6 @@ async def remove_user(message):
         
         authorized_users.remove(user_id)
         
-        # GitHub ကနေလည်း ဖျက်မယ်
         auth_list, sha = await get_file_content("authorized_users.json")
         if auth_list and user_id in auth_list.get("users", []):
             auth_list["users"].remove(user_id)
@@ -334,7 +499,6 @@ async def remove_user(message):
 # ─── /users Command (Admin Only) ──────────────────────────────────────
 @bot.message_handler(commands=['users'])
 async def list_users(message):
-    """Authorized users စာရင်းကိုပြမယ်"""
     if str(message.chat.id) != ADMIN_ID:
         await bot.reply_to(message, "❌ No Permission")
         return
@@ -343,7 +507,6 @@ async def list_users(message):
         await bot.reply_to(message, "📭 No authorized users yet.")
         return
     
-    # GitHub ကနေ လက်ရှိ authorized users စာရင်းကိုယူမယ်
     auth_list, _ = await get_file_content("authorized_users.json")
     github_users = auth_list.get("users", []) if auth_list else []
     
@@ -389,34 +552,40 @@ async def help_command(message):
 ━━━━━━━━━━━━━━━━━━━━━━
 
 🔗 `/input <session_url>` - Set your session URL
-   Example: `/input https://portal-as.ruijienetworks.com/...`
 
-🔍 `/scan <mode>` - Start scanning for voucher codes
-   Modes: `6`, `7`, `8`, `ascii-lower`, `all`
-   Example: `/scan 6` (scans 000000-999999)
+🔍 `/scan <mode>` - Start scanning (6,7,8,ascii-lower,all)
 
-📋 `/result` - Show your previously found codes
+📋 `/result` - Show your found codes
 
-🔄 `/recheck` - Recheck your saved codes (they might still work)
+🔄 `/recheck` - Recheck your saved codes
 
 ⏹ `/stop` - Stop the current scan
 
 ❓ `/help` - Show this help message
 
 ━━━━━━━━━━━━━━━━━━━━━━
+📌 **Debug Commands** 🐛
+━━━━━━━━━━━━━━━━━━━━━━
+
+🔍 `/testsession` - Test if session URL is valid
+
+📝 `/testcaptcha` - Test captcha functionality
+
+✅ `/testcode <code>` - Test a specific code
+
+🐛 `/debug` - Show debug information
+
+━━━━━━━━━━━━━━━━━━━━━━
 📌 **Admin Commands**
 ━━━━━━━━━━━━━━━━━━━━━━
 
 👥 `/addmeb <user_id>` - Authorize a new user
-   Example: `/addmeb 123456789`
 
 🗑 `/removeuser <user_id>` - Remove a user
-   Example: `/removeuser 123456789`
 
 📋 `/users` - Show all authorized users
 
 🔑 `/genkey <plan> <user_id>` - Generate a key
-   Plans: `30m`, `1h`, `1d`, `7d`, `1m`, `1y`, `unlimited`
 
 📋 `/listkeys` - Show all registered keys
 
@@ -428,11 +597,10 @@ async def help_command(message):
 📌 **How It Works**
 ━━━━━━━━━━━━━━━━━━━━━━
 
-1. Get authorized by the admin (@mgzan201)
+1. Get authorized by admin (@mgzan201)
 2. Use `/input` with your session URL
 3. Use `/scan` to start finding codes
 4. Found codes auto-save to `/result`
-5. Use `/recheck` to verify old codes
 """
     keyboard = main_menu(chat_id)
     await bot.reply_to(message, help_text, parse_mode="Markdown", reply_markup=keyboard)
@@ -470,9 +638,6 @@ async def start(message):
             parse_mode="Markdown",
             reply_markup=keyboard
         )
-
-# ─── /key Command (Removed - No longer needed) ──────────────────────────
-# Key command ကို ဖယ်ရှားလိုက်ပြီး authorization ကို admin က manage လုပ်မယ်
 
 # ─── /input Command ────────────────────────────────────────────────────────
 @bot.message_handler(commands=['input'])
@@ -522,7 +687,8 @@ async def handle_input(message):
         await bot.reply_to(
             message,
             "❌ **Invalid Session URL!**\n\n"
-            "Please check your session URL and try again.",
+            "Please check your session URL and try again.\n"
+            "Use `/testsession` to debug.",
             parse_mode="Markdown"
         )
 
@@ -946,7 +1112,6 @@ async def callback_query(call):
     chat_id = call.message.chat.id
     message_id = call.message.message_id
 
-    # ─── Main Menu ────────────────────────────────────────────────────────
     if call.data == "menu_main":
         if is_authorized(chat_id):
             await bot.edit_message_text(
@@ -972,7 +1137,6 @@ async def callback_query(call):
             )
         await call.answer()
 
-    # ─── Input Session ────────────────────────────────────────────────────
     elif call.data == "menu_input":
         if not is_authorized(chat_id):
             await call.answer("❌ You are not authorized!", show_alert=True)
@@ -991,7 +1155,6 @@ async def callback_query(call):
         )
         await call.answer()
 
-    # ─── Scan ─────────────────────────────────────────────────────────────
     elif call.data == "menu_scan":
         if not is_authorized(chat_id):
             await call.answer("❌ You are not authorized!", show_alert=True)
@@ -1020,13 +1183,11 @@ async def callback_query(call):
             parse_mode="Markdown"
         )
         await call.answer()
-        # Create a fake message object for scan
         class FakeMessage:
             def __init__(self, chat_id):
                 self.chat = type('obj', (object,), {'id': chat_id})()
         await start_scan(chat_id, mode, FakeMessage(chat_id))
 
-    # ─── Stop Scan ────────────────────────────────────────────────────────
     elif call.data == "menu_stop":
         if not is_authorized(chat_id):
             await call.answer("❌ You are not authorized!", show_alert=True)
@@ -1058,7 +1219,6 @@ async def callback_query(call):
             )
         await call.answer()
 
-    # ─── Result ───────────────────────────────────────────────────────────
     elif call.data == "menu_result":
         if not is_authorized(chat_id):
             await call.answer("❌ You are not authorized!", show_alert=True)
@@ -1087,12 +1247,10 @@ async def callback_query(call):
             )
         await call.answer()
 
-    # ─── Recheck ──────────────────────────────────────────────────────────
     elif call.data == "menu_recheck":
         if not is_authorized(chat_id):
             await call.answer("❌ You are not authorized!", show_alert=True)
             return
-        # Trigger recheck with a fake message
         class FakeMessage:
             def __init__(self, chat_id):
                 self.chat = type('obj', (object,), {'id': chat_id})()
@@ -1100,7 +1258,6 @@ async def callback_query(call):
         await bot.delete_message(chat_id, message_id)
         await call.answer()
 
-    # ─── Help ─────────────────────────────────────────────────────────────
     elif call.data == "menu_help":
         if is_authorized(chat_id):
             help_text = """
@@ -1112,10 +1269,9 @@ async def callback_query(call):
 
 🔗 `/input <session_url>` - Set your session URL
 
-🔍 `/scan <mode>` - Start scanning for voucher codes
-   Modes: `6`, `7`, `8`, `ascii-lower`, `all`
+🔍 `/scan <mode>` - Start scanning (6,7,8,ascii-lower,all)
 
-📋 `/result` - Show your previously found codes
+📋 `/result` - Show your found codes
 
 🔄 `/recheck` - Recheck your saved codes
 
@@ -1124,14 +1280,16 @@ async def callback_query(call):
 ❓ `/help` - Show this help message
 
 ━━━━━━━━━━━━━━━━━━━━━━
-📌 **How It Works**
+📌 **Debug Commands** 🐛
 ━━━━━━━━━━━━━━━━━━━━━━
 
-1. Get authorized by the admin (@mgzan201)
-2. Use `/input` with your session URL
-3. Use `/scan` to start finding codes
-4. Found codes auto-save to `/result`
-5. Use `/recheck` to verify old codes
+🔍 `/testsession` - Test if session URL is valid
+
+📝 `/testcaptcha` - Test captcha functionality
+
+✅ `/testcode <code>` - Test a specific code
+
+🐛 `/debug` - Show debug information
 """
         else:
             help_text = """
@@ -1151,7 +1309,6 @@ Please contact the admin to get access:
         )
         await call.answer()
 
-    # ─── Admin Menu ──────────────────────────────────────────────────────
     elif call.data.startswith("admin_"):
         if str(chat_id) != ADMIN_ID:
             await call.answer("❌ No Permission", show_alert=True)
@@ -1792,7 +1949,6 @@ async def main():
         connector_owner=False
     )
     try:
-        # GitHub ကနေ authorized users စာရင်းကိုယူမယ်
         await load_authorized_users()
         asyncio.create_task(web_server())
         asyncio.create_task(github_update_scheduler())

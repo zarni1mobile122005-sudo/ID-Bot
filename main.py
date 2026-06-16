@@ -31,24 +31,58 @@ CONCURRENCY = 900
 _voucher_sem = None
 _start_time = time.monotonic()
 
+# ─── Authorized Users ──────────────────────────────────────────────────────
+# Admin ကနေ ခွင့်ပြုထားတဲ့ users တွေကို သိမ်းမယ်
+authorized_users = set()
+authorized_users.add(int(ADMIN_ID))  # Admin ကို auto authorize
+
+# ─── Load Authorized Users from GitHub ────────────────────────────────────
+async def load_authorized_users():
+    """GitHub ကနေ authorized users စာရင်းကိုယူမယ်"""
+    global authorized_users
+    try:
+        auth_list, _ = await get_file_content("authorized_users.json")
+        if auth_list and "users" in auth_list:
+            for uid in auth_list["users"]:
+                authorized_users.add(int(uid))
+        # Admin ကို အမြဲတမ်းထည့်ထားမယ်
+        authorized_users.add(int(ADMIN_ID))
+        print(f"Loaded {len(authorized_users)} authorized users from GitHub")
+    except Exception as e:
+        print(f"Error loading authorized users: {e}")
+
+# ─── Authorization Check ──────────────────────────────────────────────────
+def is_authorized(chat_id):
+    """User ကို သုံးခွင့်ရှိမရှိ စစ်တယ်"""
+    return chat_id in authorized_users
+
 # ─── Main Menu Buttons ──────────────────────────────────────────────────────
-def main_menu():
+def main_menu(chat_id=None):
     keyboard = InlineKeyboardMarkup()
-    keyboard.row(
-        InlineKeyboardButton("📝 Register Key", callback_data="menu_key"),
-        InlineKeyboardButton("🔗 Input Session", callback_data="menu_input")
-    )
-    keyboard.row(
-        InlineKeyboardButton("🔍 Start Scan", callback_data="menu_scan"),
-        InlineKeyboardButton("⏹ Stop Scan", callback_data="menu_stop")
-    )
-    keyboard.row(
-        InlineKeyboardButton("📋 My Codes", callback_data="menu_result"),
-        InlineKeyboardButton("🔄 Recheck", callback_data="menu_recheck")
-    )
-    keyboard.row(
-        InlineKeyboardButton("❓ Help", callback_data="menu_help")
-    )
+    
+    # User က authorized ဖြစ်မှသာ buttons ကိုပြမယ်
+    if chat_id and is_authorized(chat_id):
+        keyboard.row(
+            InlineKeyboardButton("🔗 Input Session", callback_data="menu_input"),
+            InlineKeyboardButton("🔍 Start Scan", callback_data="menu_scan")
+        )
+        keyboard.row(
+            InlineKeyboardButton("⏹ Stop Scan", callback_data="menu_stop"),
+            InlineKeyboardButton("📋 My Codes", callback_data="menu_result")
+        )
+        keyboard.row(
+            InlineKeyboardButton("🔄 Recheck", callback_data="menu_recheck"),
+            InlineKeyboardButton("❓ Help", callback_data="menu_help")
+        )
+    else:
+        # ခွင့်မပြုရင် admin ကိုဆက်သွယ်ခိုင်းတဲ့ button ပြမယ်
+        keyboard.row(
+            InlineKeyboardButton("👤 Contact Admin", url="https://t.me/mgzan201")
+        )
+        keyboard.row(
+            InlineKeyboardButton("❓ Help", callback_data="menu_help")
+        )
+    
     return keyboard
 
 # ─── Admin Menu ─────────────────────────────────────────────────────────────
@@ -63,6 +97,7 @@ def admin_menu():
         InlineKeyboardButton("🗑 Del Key", callback_data="admin_delkey")
     )
     keyboard.row(
+        InlineKeyboardButton("👥 Authorized Users", callback_data="admin_users"),
         InlineKeyboardButton("◀️ Back", callback_data="menu_main")
     )
     return keyboard
@@ -160,18 +195,198 @@ def generate_expiry(plan):
         return "9999-12-31T23:59:59Z"
     return (now + plans[plan]).isoformat()
 
+# ─── /addmeb Command (Admin Only) ──────────────────────────────────────
+@bot.message_handler(commands=['addmeb'])
+async def add_user(message):
+    """Admin က user အသစ်ကို ခွင့်ပြုပေးတဲ့ command"""
+    if str(message.chat.id) != ADMIN_ID:
+        await bot.reply_to(message, "❌ No Permission")
+        return
+    
+    args = message.text.split()
+    if len(args) < 2:
+        await bot.reply_to(
+            message,
+            "⚠️ **Usage:**\n\n`/addmeb <chat_id>`\n\n"
+            "**Example:** `/addmeb 123456789`",
+            parse_mode="Markdown"
+        )
+        return
+    
+    try:
+        new_user_id = int(args[1])
+        if new_user_id in authorized_users:
+            await bot.reply_to(
+                message,
+                f"ℹ️ User `{new_user_id}` is already authorized.",
+                parse_mode="Markdown"
+            )
+            return
+        
+        authorized_users.add(new_user_id)
+        
+        # ခွင့်ပြုထားတဲ့ user ကို GitHub မှာလည်း သိမ်းမယ်
+        auth_list, sha = await get_file_content("authorized_users.json")
+        if not auth_list:
+            auth_list = {"users": []}
+        if new_user_id not in auth_list["users"]:
+            auth_list["users"].append(new_user_id)
+            await update_file_content(
+                "authorized_users.json",
+                auth_list,
+                sha,
+                f"Add user {new_user_id}"
+            )
+        
+        await bot.reply_to(
+            message,
+            f"✅ **User Authorized!**\n\n"
+            f"👤 User ID: `{new_user_id}`\n"
+            f"📋 Status: `Authorized`",
+            parse_mode="Markdown"
+        )
+        
+        # ခွင့်ပြုခံရတဲ့ user ကို notification ပို့မယ်
+        try:
+            await bot.send_message(
+                new_user_id,
+                "✅ **You have been authorized to use this bot!**\n\n"
+                "You can now use all commands.\n"
+                "Type /help to see available commands.",
+                parse_mode="Markdown"
+            )
+        except:
+            pass
+            
+    except ValueError:
+        await bot.reply_to(
+            message,
+            "❌ **Invalid User ID!**\n\n"
+            "Please enter a valid numeric user ID.",
+            parse_mode="Markdown"
+        )
+
+# ─── /removeuser Command (Admin Only) ──────────────────────────────────
+@bot.message_handler(commands=['removeuser'])
+async def remove_user(message):
+    """Admin က user ကို ခွင့်မပြုတော့ဘူးဆိုတဲ့ command"""
+    if str(message.chat.id) != ADMIN_ID:
+        await bot.reply_to(message, "❌ No Permission")
+        return
+    
+    args = message.text.split()
+    if len(args) < 2:
+        await bot.reply_to(
+            message,
+            "⚠️ **Usage:**\n\n`/removeuser <chat_id>`\n\n"
+            "**Example:** `/removeuser 123456789`",
+            parse_mode="Markdown"
+        )
+        return
+    
+    try:
+        user_id = int(args[1])
+        if user_id == int(ADMIN_ID):
+            await bot.reply_to(
+                message,
+                "❌ Cannot remove the admin!",
+                parse_mode="Markdown"
+            )
+            return
+        
+        if user_id not in authorized_users:
+            await bot.reply_to(
+                message,
+                f"ℹ️ User `{user_id}` is not authorized.",
+                parse_mode="Markdown"
+            )
+            return
+        
+        authorized_users.remove(user_id)
+        
+        # GitHub ကနေလည်း ဖျက်မယ်
+        auth_list, sha = await get_file_content("authorized_users.json")
+        if auth_list and user_id in auth_list.get("users", []):
+            auth_list["users"].remove(user_id)
+            await update_file_content(
+                "authorized_users.json",
+                auth_list,
+                sha,
+                f"Remove user {user_id}"
+            )
+        
+        await bot.reply_to(
+            message,
+            f"🗑 **User Removed!**\n\n"
+            f"👤 User ID: `{user_id}`\n"
+            f"📋 Status: `Removed`",
+            parse_mode="Markdown"
+        )
+            
+    except ValueError:
+        await bot.reply_to(
+            message,
+            "❌ **Invalid User ID!**\n\n"
+            "Please enter a valid numeric user ID.",
+            parse_mode="Markdown"
+        )
+
+# ─── /users Command (Admin Only) ──────────────────────────────────────
+@bot.message_handler(commands=['users'])
+async def list_users(message):
+    """Authorized users စာရင်းကိုပြမယ်"""
+    if str(message.chat.id) != ADMIN_ID:
+        await bot.reply_to(message, "❌ No Permission")
+        return
+    
+    if not authorized_users:
+        await bot.reply_to(message, "📭 No authorized users yet.")
+        return
+    
+    # GitHub ကနေ လက်ရှိ authorized users စာရင်းကိုယူမယ်
+    auth_list, _ = await get_file_content("authorized_users.json")
+    github_users = auth_list.get("users", []) if auth_list else []
+    
+    lines = ["📋 **Authorized Users**\n"]
+    lines.append(f"👥 Total: `{len(github_users)}` users\n")
+    
+    for uid in github_users:
+        is_admin = "👑 Admin" if uid == int(ADMIN_ID) else "✅ User"
+        lines.append(f"• `{uid}` - {is_admin}")
+    
+    text = "\n".join(lines)
+    keyboard = admin_menu()
+    
+    if len(text) > 4096:
+        for i in range(0, len(text), 4096):
+            await bot.send_message(message.chat.id, text[i:i+4096], parse_mode="Markdown")
+    else:
+        await bot.reply_to(message, text, parse_mode="Markdown", reply_markup=keyboard)
+
 # ─── /help Command ──────────────────────────────────────────────────────────
 @bot.message_handler(commands=['help'])
 async def help_command(message):
+    chat_id = message.chat.id
+    
+    if not is_authorized(chat_id):
+        await bot.reply_to(
+            message,
+            "❌ **You are not authorized to use this bot!**\n\n"
+            "Please contact the admin to get access:\n"
+            "👤 Admin: @mgzan201",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup().row(
+                InlineKeyboardButton("👤 Contact Admin", url="https://t.me/mgzan201")
+            )
+        )
+        return
+    
     help_text = """
-🤖 **Bot Commands & Usage**
+🤖 **Voucher Scanner Bot**
 
 ━━━━━━━━━━━━━━━━━━━━━━
 📌 **User Commands**
 ━━━━━━━━━━━━━━━━━━━━━━
-
-🔑 `/key` - Register your key to use the bot
-   Usage: `/key` (then enter your key)
 
 🔗 `/input <session_url>` - Set your session URL
    Example: `/input https://portal-as.ruijienetworks.com/...`
@@ -192,14 +407,20 @@ async def help_command(message):
 📌 **Admin Commands**
 ━━━━━━━━━━━━━━━━━━━━━━
 
+👥 `/addmeb <user_id>` - Authorize a new user
+   Example: `/addmeb 123456789`
+
+🗑 `/removeuser <user_id>` - Remove a user
+   Example: `/removeuser 123456789`
+
+📋 `/users` - Show all authorized users
+
 🔑 `/genkey <plan> <user_id>` - Generate a key
    Plans: `30m`, `1h`, `1d`, `7d`, `1m`, `1y`, `unlimited`
-   Example: `/genkey 7d 123456789`
 
 📋 `/listkeys` - Show all registered keys
 
 🗑 `/delkey <user_id>` - Delete a user's key
-   Example: `/delkey 123456789`
 
 📊 `/status` - Show bot status
 
@@ -207,90 +428,69 @@ async def help_command(message):
 📌 **How It Works**
 ━━━━━━━━━━━━━━━━━━━━━━
 
-1. Get a key from the admin
-2. Use `/key` to register
-3. Use `/input` with your session URL
-4. Use `/scan` to start finding codes
-5. Found codes auto-save to `/result`
-6. Use `/recheck` to verify old codes
-
-⚠️ **Note:** Your key has an expiration time!
+1. Get authorized by the admin (@mgzan201)
+2. Use `/input` with your session URL
+3. Use `/scan` to start finding codes
+4. Found codes auto-save to `/result`
+5. Use `/recheck` to verify old codes
 """
-    keyboard = InlineKeyboardMarkup()
-    keyboard.row(
-        InlineKeyboardButton("📝 Register Key", callback_data="menu_key"),
-        InlineKeyboardButton("🔗 Input Session", callback_data="menu_input")
-    )
-    keyboard.row(
-        InlineKeyboardButton("🔍 Start Scan", callback_data="menu_scan"),
-        InlineKeyboardButton("⏹ Stop Scan", callback_data="menu_stop")
-    )
-    keyboard.row(
-        InlineKeyboardButton("📋 My Codes", callback_data="menu_result"),
-        InlineKeyboardButton("🔄 Recheck", callback_data="menu_recheck")
-    )
+    keyboard = main_menu(chat_id)
     await bot.reply_to(message, help_text, parse_mode="Markdown", reply_markup=keyboard)
 
 # ─── /start Command ─────────────────────────────────────────────────────────
 @bot.message_handler(commands=['start'])
 async def start(message):
-    keyboard = main_menu()
-    await bot.reply_to(
-        message,
-        "🤖 **Welcome to Voucher Scanner Bot!**\n\n"
-        "Use the buttons below or type commands.\n"
-        "Type /help for detailed instructions.",
-        parse_mode="Markdown",
-        reply_markup=keyboard
-    )
-
-# ─── /key Command ───────────────────────────────────────────────────────────
-@bot.message_handler(commands=['key'])
-async def handle_key(message):
-    global approve
-    key = str(message.chat.id)
-    auth_list, _ = await get_file_content("auth_list.json")
-    if key in auth_list:
-        valid = check_key_expiration(auth_list[key])
-        if valid:
-            approve[message.chat.id] = True
-            user_data[message.chat.id] = {}
-            keyboard = InlineKeyboardMarkup()
-            keyboard.row(
-                InlineKeyboardButton("🔗 Input Session", callback_data="menu_input"),
-                InlineKeyboardButton("🔍 Start Scan", callback_data="menu_scan")
-            )
-            keyboard.row(
-                InlineKeyboardButton("📋 My Codes", callback_data="menu_result"),
-                InlineKeyboardButton("🔄 Recheck", callback_data="menu_recheck")
-            )
-            await bot.reply_to(
-                message,
-                "✅ **Key Verified!**\n\n"
-                "Your key is valid. You can now use the bot.\n"
-                "Use /input to set your session URL.",
-                parse_mode="Markdown",
-                reply_markup=keyboard
-            )
-        else:
-            approve[message.chat.id] = False
-            await bot.reply_to(
-                message,
-                "❌ **Key Expired!**\n\n"
-                "Your key has expired. Please contact the admin for a new key.",
-                parse_mode="Markdown"
-            )
-    else:
+    chat_id = message.chat.id
+    
+    if is_authorized(chat_id):
+        keyboard = main_menu(chat_id)
         await bot.reply_to(
             message,
-            "❌ **Key Not Found!**\n\n"
-            "Your key is not registered. Please contact the admin to get a key.",
-            parse_mode="Markdown"
+            "🤖 **Welcome to Voucher Scanner Bot!**\n\n"
+            "You are authorized to use this bot.\n"
+            "Use the buttons below or type commands.\n"
+            "Type /help for detailed instructions.",
+            parse_mode="Markdown",
+            reply_markup=keyboard
         )
+    else:
+        keyboard = InlineKeyboardMarkup()
+        keyboard.row(
+            InlineKeyboardButton("👤 Contact Admin", url="https://t.me/mgzan201")
+        )
+        keyboard.row(
+            InlineKeyboardButton("❓ Help", callback_data="menu_help")
+        )
+        await bot.reply_to(
+            message,
+            "❌ **You are not authorized to use this bot!**\n\n"
+            "Please contact the admin to get access:\n"
+            "👤 Admin: @mgzan201\n\n"
+            "Click the button below to contact the admin.",
+            parse_mode="Markdown",
+            reply_markup=keyboard
+        )
+
+# ─── /key Command (Removed - No longer needed) ──────────────────────────
+# Key command ကို ဖယ်ရှားလိုက်ပြီး authorization ကို admin က manage လုပ်မယ်
 
 # ─── /input Command ────────────────────────────────────────────────────────
 @bot.message_handler(commands=['input'])
 async def handle_input(message):
+    chat_id = message.chat.id
+    
+    if not is_authorized(chat_id):
+        await bot.reply_to(
+            message,
+            "❌ **You are not authorized to use this bot!**\n\n"
+            "Please contact the admin to get access.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup().row(
+                InlineKeyboardButton("👤 Contact Admin", url="https://t.me/mgzan201")
+            )
+        )
+        return
+    
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
         keyboard = InlineKeyboardMarkup()
@@ -304,38 +504,45 @@ async def handle_input(message):
         )
         return
     url = args[1]
-    if message.chat.id in user_data:
-        await bot.reply_to(message, "⏳ Checking session URL...")
-        if await check_session_url(session_url=url):
-            user_data[message.chat.id]['session_url'] = url
-            keyboard = InlineKeyboardMarkup()
-            keyboard.row(
-                InlineKeyboardButton("🔍 Start Scan", callback_data="menu_scan"),
-                InlineKeyboardButton("📋 My Codes", callback_data="menu_result")
-            )
-            keyboard.row(
-                InlineKeyboardButton("🔄 Recheck", callback_data="menu_recheck"),
-                InlineKeyboardButton("◀️ Back", callback_data="menu_main")
-            )
-            await bot.reply_to(
-                message,
-                "✅ **Session URL Saved!**\n\n"
-                "You can now start scanning.\n"
-                "Use `/scan 6` or select from the menu.",
-                parse_mode="Markdown",
-                reply_markup=keyboard
-            )
-        else:
-            await bot.reply_to(
-                message,
-                "❌ **Invalid Session URL!**\n\n"
-                "Please check your session URL and try again.",
-                parse_mode="Markdown"
-            )
+    await bot.reply_to(message, "⏳ Checking session URL...")
+    if await check_session_url(session_url=url):
+        if chat_id not in user_data:
+            user_data[chat_id] = {}
+        user_data[chat_id]['session_url'] = url
+        keyboard = main_menu(chat_id)
+        await bot.reply_to(
+            message,
+            "✅ **Session URL Saved!**\n\n"
+            "You can now start scanning.\n"
+            "Use `/scan 6` or select from the menu.",
+            parse_mode="Markdown",
+            reply_markup=keyboard
+        )
+    else:
+        await bot.reply_to(
+            message,
+            "❌ **Invalid Session URL!**\n\n"
+            "Please check your session URL and try again.",
+            parse_mode="Markdown"
+        )
 
 # ─── /scan Command ──────────────────────────────────────────────────────────
 @bot.message_handler(commands=['scan'])
 async def scan(message):
+    chat_id = message.chat.id
+    
+    if not is_authorized(chat_id):
+        await bot.reply_to(
+            message,
+            "❌ **You are not authorized to use this bot!**\n\n"
+            "Please contact the admin to get access.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup().row(
+                InlineKeyboardButton("👤 Contact Admin", url="https://t.me/mgzan201")
+            )
+        )
+        return
+    
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
         keyboard = scan_mode_menu()
@@ -349,21 +556,17 @@ async def scan(message):
         )
         return
     mode = args[1]
-    chat_id = message.chat.id
     await start_scan(chat_id, mode, message)
 
 async def start_scan(chat_id, mode, message=None):
-    if not approve.get(chat_id, False):
-        keyboard = InlineKeyboardMarkup()
-        keyboard.row(InlineKeyboardButton("📝 Register Key", callback_data="menu_key"))
+    if not is_authorized(chat_id):
         await bot.send_message(
             chat_id,
-            "❌ **Please register your key first!**\n\n"
-            "Use `/key` to register.",
-            parse_mode="Markdown",
-            reply_markup=keyboard
+            "❌ **You are not authorized to use this bot!**",
+            parse_mode="Markdown"
         )
         return
+    
     if chat_id not in user_data:
         await bot.send_message(
             chat_id,
@@ -421,40 +624,34 @@ async def start_scan(chat_id, mode, message=None):
 # ─── /result Command ────────────────────────────────────────────────────────
 @bot.message_handler(commands=['result'])
 async def handle_result(message):
-    auth_list, _ = await get_file_content("auth_list.json")
-    if str(message.chat.id) in auth_list:
-        results, _ = await get_file_content("result.json")
-        chat_id_str = str(message.chat.id)
-        if chat_id_str in results and results[chat_id_str]:
-            codes = "\n".join(results[chat_id_str])
-            keyboard = InlineKeyboardMarkup()
-            keyboard.row(
-                InlineKeyboardButton("🔄 Recheck", callback_data="menu_recheck"),
-                InlineKeyboardButton("◀️ Back", callback_data="menu_main")
-            )
-            await bot.reply_to(
-                message,
-                f"✅ **Found Codes:**\n\n```\n{codes}\n```",
-                parse_mode="Markdown",
-                reply_markup=keyboard
-            )
-        else:
-            keyboard = InlineKeyboardMarkup()
-            keyboard.row(InlineKeyboardButton("🔍 Start Scan", callback_data="menu_scan"))
-            await bot.reply_to(
-                message,
-                "📭 **No codes found yet.**\n\n"
-                "Start a scan to find voucher codes!",
-                parse_mode="Markdown",
-                reply_markup=keyboard
-            )
-    else:
-        keyboard = InlineKeyboardMarkup()
-        keyboard.row(InlineKeyboardButton("📝 Register Key", callback_data="menu_key"))
+    chat_id = message.chat.id
+    
+    if not is_authorized(chat_id):
         await bot.reply_to(
             message,
-            "❌ **Please register your key first!**\n\n"
-            "Use `/key` to register.",
+            "❌ **You are not authorized to use this bot!**\n\n"
+            "Please contact the admin to get access.",
+            parse_mode="Markdown"
+        )
+        return
+    
+    results, _ = await get_file_content("result.json")
+    chat_id_str = str(chat_id)
+    if chat_id_str in results and results[chat_id_str]:
+        codes = "\n".join(results[chat_id_str])
+        keyboard = main_menu(chat_id)
+        await bot.reply_to(
+            message,
+            f"✅ **Found Codes:**\n\n```\n{codes}\n```",
+            parse_mode="Markdown",
+            reply_markup=keyboard
+        )
+    else:
+        keyboard = main_menu(chat_id)
+        await bot.reply_to(
+            message,
+            "📭 **No codes found yet.**\n\n"
+            "Start a scan to find voucher codes!",
             parse_mode="Markdown",
             reply_markup=keyboard
         )
@@ -463,90 +660,76 @@ async def handle_result(message):
 @bot.message_handler(commands=['recheck'])
 async def recheck(message):
     chat_id = message.chat.id
-    if not approve.get(chat_id, False):
-        keyboard = InlineKeyboardMarkup()
-        keyboard.row(InlineKeyboardButton("📝 Register Key", callback_data="menu_key"))
+    
+    if not is_authorized(chat_id):
         await bot.reply_to(
             message,
-            "❌ **Please register your key first!**\n\n"
-            "Use `/key` to register.",
-            parse_mode="Markdown",
-            reply_markup=keyboard
+            "❌ **You are not authorized to use this bot!**\n\n"
+            "Please contact the admin to get access.",
+            parse_mode="Markdown"
         )
         return
-    auth_list, _ = await get_file_content("auth_list.json")
-    if str(chat_id) in auth_list:
-        results, sha = await get_file_content("result.json")
-        chat_id_str = str(chat_id)
-        if chat_id_str in results and results[chat_id_str]:
-            if chat_id not in user_data:
-                await bot.reply_to(
-                    message,
-                    "❌ **Please set your session URL first!**\n\n"
-                    "Use `/input` or the menu button.",
-                    parse_mode="Markdown"
-                )
-                return
-            if "session_url" not in user_data[chat_id]:
-                await bot.reply_to(
-                    message,
-                    "❌ **Please set your session URL first!**\n\n"
-                    "Use `/input` or the menu button.",
-                    parse_mode="Markdown"
-                )
-                return
-            codes = results[chat_id_str]
+    
+    results, sha = await get_file_content("result.json")
+    chat_id_str = str(chat_id)
+    if chat_id_str in results and results[chat_id_str]:
+        if chat_id not in user_data:
             await bot.reply_to(
                 message,
-                "🔄 **Rechecking your codes...**\n\n"
-                f"Checking {len(codes)} codes...",
+                "❌ **Please set your session URL first!**\n\n"
+                "Use `/input` or the menu button.",
                 parse_mode="Markdown"
             )
-            session_url_recheck = user_data[chat_id]["session_url"]
-            recheck_list = []
-            for code in codes:
-                recode = await perform_check(
-                    session_url_recheck,
-                    code,
-                    chat_id,
-                    scan_id=None,
-                    recheck=True,
-                    message=message
-                )
-                if recode:
-                    recheck_list.append(recode)
-            if recheck_list:
-                to_show = "\n".join(recheck_list)
-                await bot.reply_to(
-                    message,
-                    f"✅ **Rechecked Codes:**\n\n```\n{to_show}\n```",
-                    parse_mode="Markdown"
-                )
-            else:
-                await bot.reply_to(
-                    message,
-                    "📭 **No working codes found.**\n\n"
-                    "All your codes might be expired.",
-                    parse_mode="Markdown"
-                )
-            await save_rechecked_codes(chat_id_str, recheck_list, sha)
-        else:
-            keyboard = InlineKeyboardMarkup()
-            keyboard.row(InlineKeyboardButton("🔍 Start Scan", callback_data="menu_scan"))
+            return
+        if "session_url" not in user_data[chat_id]:
             await bot.reply_to(
                 message,
-                "📭 **You don't have any saved codes yet.**\n\n"
-                "Start a scan to find voucher codes!",
-                parse_mode="Markdown",
-                reply_markup=keyboard
+                "❌ **Please set your session URL first!**\n\n"
+                "Use `/input` or the menu button.",
+                parse_mode="Markdown"
             )
-    else:
-        keyboard = InlineKeyboardMarkup()
-        keyboard.row(InlineKeyboardButton("📝 Register Key", callback_data="menu_key"))
+            return
+        codes = results[chat_id_str]
         await bot.reply_to(
             message,
-            "❌ **Please register your key first!**\n\n"
-            "Use `/key` to register.",
+            "🔄 **Rechecking your codes...**\n\n"
+            f"Checking {len(codes)} codes...",
+            parse_mode="Markdown"
+        )
+        session_url_recheck = user_data[chat_id]["session_url"]
+        recheck_list = []
+        for code in codes:
+            recode = await perform_check(
+                session_url_recheck,
+                code,
+                chat_id,
+                scan_id=None,
+                recheck=True,
+                message=message
+            )
+            if recode:
+                recheck_list.append(recode)
+        if recheck_list:
+            to_show = "\n".join(recheck_list)
+            await bot.reply_to(
+                message,
+                f"✅ **Rechecked Codes:**\n\n```\n{to_show}\n```",
+                parse_mode="Markdown"
+            )
+        else:
+            await bot.reply_to(
+                message,
+                "📭 **No working codes found.**\n\n"
+                "All your codes might be expired.",
+                parse_mode="Markdown"
+            )
+        await save_rechecked_codes(chat_id_str, recheck_list, sha)
+    else:
+        keyboard = main_menu(chat_id)
+        await bot.reply_to(
+            message,
+            "📭 **You don't have any saved codes yet.**\n\n"
+            "Start a scan to find voucher codes!",
             parse_mode="Markdown",
             reply_markup=keyboard
         )
@@ -555,6 +738,16 @@ async def recheck(message):
 @bot.message_handler(commands=['stop'])
 async def stop_scan(message):
     chat_id = message.chat.id
+    
+    if not is_authorized(chat_id):
+        await bot.reply_to(
+            message,
+            "❌ **You are not authorized to use this bot!**\n\n"
+            "Please contact the admin to get access.",
+            parse_mode="Markdown"
+        )
+        return
+    
     data = scan_tasks.get(chat_id)
     if data and not data["task"].done():
         data["stop"] = True
@@ -564,11 +757,7 @@ async def stop_scan(message):
         success_texts.pop(chat_id, None)
         limited_messages.pop(chat_id, None)
         limited_texts.pop(chat_id, None)
-        keyboard = InlineKeyboardMarkup()
-        keyboard.row(
-            InlineKeyboardButton("🔍 Start New Scan", callback_data="menu_scan"),
-            InlineKeyboardButton("◀️ Back", callback_data="menu_main")
-        )
+        keyboard = main_menu(chat_id)
         await bot.reply_to(
             message,
             "⏹ **Scan Stopped!**\n\n"
@@ -593,7 +782,6 @@ async def status(message):
         1 for data in scan_tasks.values()
         if not data["task"].done()
     )
-    approved_users = sum(1 for v in approve.values() if v)
     uptime_seconds = int(time.monotonic() - _start_time)
     hours, remainder = divmod(uptime_seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
@@ -603,7 +791,7 @@ async def status(message):
         f"📊 **Bot Status**\n\n"
         f"⏱ Uptime: {hours}h {minutes}m {seconds}s\n"
         f"🔍 Active Scans: {active_scans}\n"
-        f"✅ Approved Users: {approved_users}\n"
+        f"👥 Authorized Users: {len(authorized_users)}\n"
         f"👥 Sessions Loaded: {len(user_data)}",
         parse_mode="Markdown",
         reply_markup=keyboard
@@ -760,33 +948,35 @@ async def callback_query(call):
 
     # ─── Main Menu ────────────────────────────────────────────────────────
     if call.data == "menu_main":
-        await bot.edit_message_text(
-            "🤖 **Main Menu**\n\n"
-            "Choose an option below:",
-            chat_id=chat_id,
-            message_id=message_id,
-            parse_mode="Markdown",
-            reply_markup=main_menu()
-        )
-        await call.answer()
-
-    # ─── Register Key ─────────────────────────────────────────────────────
-    elif call.data == "menu_key":
-        await bot.edit_message_text(
-            "🔑 **Register Your Key**\n\n"
-            "Please type `/key` in the chat to register.\n\n"
-            "If you don't have a key, contact the admin.",
-            chat_id=chat_id,
-            message_id=message_id,
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup().row(
-                InlineKeyboardButton("◀️ Back", callback_data="menu_main")
+        if is_authorized(chat_id):
+            await bot.edit_message_text(
+                "🤖 **Main Menu**\n\n"
+                "Choose an option below:",
+                chat_id=chat_id,
+                message_id=message_id,
+                parse_mode="Markdown",
+                reply_markup=main_menu(chat_id)
             )
-        )
+        else:
+            keyboard = InlineKeyboardMarkup()
+            keyboard.row(
+                InlineKeyboardButton("👤 Contact Admin", url="https://t.me/mgzan201")
+            )
+            await bot.edit_message_text(
+                "❌ **You are not authorized to use this bot!**\n\n"
+                "Please contact the admin to get access.",
+                chat_id=chat_id,
+                message_id=message_id,
+                parse_mode="Markdown",
+                reply_markup=keyboard
+            )
         await call.answer()
 
     # ─── Input Session ────────────────────────────────────────────────────
     elif call.data == "menu_input":
+        if not is_authorized(chat_id):
+            await call.answer("❌ You are not authorized!", show_alert=True)
+            return
         await bot.edit_message_text(
             "🔗 **Input Session URL**\n\n"
             "Please type `/input <your_session_url>` in the chat.\n\n"
@@ -803,6 +993,9 @@ async def callback_query(call):
 
     # ─── Scan ─────────────────────────────────────────────────────────────
     elif call.data == "menu_scan":
+        if not is_authorized(chat_id):
+            await call.answer("❌ You are not authorized!", show_alert=True)
+            return
         await bot.edit_message_text(
             "🔍 **Select Scan Mode**\n\n"
             "Choose a mode below:",
@@ -814,6 +1007,9 @@ async def callback_query(call):
         await call.answer()
 
     elif call.data.startswith("scan_"):
+        if not is_authorized(chat_id):
+            await call.answer("❌ You are not authorized!", show_alert=True)
+            return
         mode = call.data.replace("scan_", "")
         await bot.edit_message_text(
             f"🔍 **Starting Scan**\n\n"
@@ -832,6 +1028,9 @@ async def callback_query(call):
 
     # ─── Stop Scan ────────────────────────────────────────────────────────
     elif call.data == "menu_stop":
+        if not is_authorized(chat_id):
+            await call.answer("❌ You are not authorized!", show_alert=True)
+            return
         data = scan_tasks.get(chat_id)
         if data and not data["task"].done():
             data["stop"] = True
@@ -847,7 +1046,7 @@ async def callback_query(call):
                 chat_id=chat_id,
                 message_id=message_id,
                 parse_mode="Markdown",
-                reply_markup=main_menu()
+                reply_markup=main_menu(chat_id)
             )
         else:
             await bot.edit_message_text(
@@ -855,53 +1054,32 @@ async def callback_query(call):
                 chat_id=chat_id,
                 message_id=message_id,
                 parse_mode="Markdown",
-                reply_markup=main_menu()
+                reply_markup=main_menu(chat_id)
             )
         await call.answer()
 
     # ─── Result ───────────────────────────────────────────────────────────
     elif call.data == "menu_result":
-        auth_list, _ = await get_file_content("auth_list.json")
-        if str(chat_id) in auth_list:
-            results, _ = await get_file_content("result.json")
-            chat_id_str = str(chat_id)
-            if chat_id_str in results and results[chat_id_str]:
-                codes = "\n".join(results[chat_id_str])
-                keyboard = InlineKeyboardMarkup()
-                keyboard.row(
-                    InlineKeyboardButton("🔄 Recheck", callback_data="menu_recheck"),
-                    InlineKeyboardButton("◀️ Back", callback_data="menu_main")
-                )
-                await bot.edit_message_text(
-                    f"✅ **Found Codes:**\n\n```\n{codes}\n```",
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    parse_mode="Markdown",
-                    reply_markup=keyboard
-                )
-            else:
-                keyboard = InlineKeyboardMarkup()
-                keyboard.row(
-                    InlineKeyboardButton("🔍 Start Scan", callback_data="menu_scan"),
-                    InlineKeyboardButton("◀️ Back", callback_data="menu_main")
-                )
-                await bot.edit_message_text(
-                    "📭 **No codes found yet.**\n\n"
-                    "Start a scan to find voucher codes!",
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    parse_mode="Markdown",
-                    reply_markup=keyboard
-                )
-        else:
-            keyboard = InlineKeyboardMarkup()
-            keyboard.row(
-                InlineKeyboardButton("📝 Register Key", callback_data="menu_key"),
-                InlineKeyboardButton("◀️ Back", callback_data="menu_main")
-            )
+        if not is_authorized(chat_id):
+            await call.answer("❌ You are not authorized!", show_alert=True)
+            return
+        results, _ = await get_file_content("result.json")
+        chat_id_str = str(chat_id)
+        if chat_id_str in results and results[chat_id_str]:
+            codes = "\n".join(results[chat_id_str])
+            keyboard = main_menu(chat_id)
             await bot.edit_message_text(
-                "❌ **Please register your key first!**\n\n"
-                "Use `/key` to register.",
+                f"✅ **Found Codes:**\n\n```\n{codes}\n```",
+                chat_id=chat_id,
+                message_id=message_id,
+                parse_mode="Markdown",
+                reply_markup=keyboard
+            )
+        else:
+            keyboard = main_menu(chat_id)
+            await bot.edit_message_text(
+                "📭 **No codes found yet.**\n\n"
+                "Start a scan to find voucher codes!",
                 chat_id=chat_id,
                 message_id=message_id,
                 parse_mode="Markdown",
@@ -911,6 +1089,9 @@ async def callback_query(call):
 
     # ─── Recheck ──────────────────────────────────────────────────────────
     elif call.data == "menu_recheck":
+        if not is_authorized(chat_id):
+            await call.answer("❌ You are not authorized!", show_alert=True)
+            return
         # Trigger recheck with a fake message
         class FakeMessage:
             def __init__(self, chat_id):
@@ -921,14 +1102,13 @@ async def callback_query(call):
 
     # ─── Help ─────────────────────────────────────────────────────────────
     elif call.data == "menu_help":
-        help_text = """
+        if is_authorized(chat_id):
+            help_text = """
 🤖 **Bot Commands & Usage**
 
 ━━━━━━━━━━━━━━━━━━━━━━
 📌 **User Commands**
 ━━━━━━━━━━━━━━━━━━━━━━
-
-🔑 `/key` - Register your key to use the bot
 
 🔗 `/input <session_url>` - Set your session URL
 
@@ -947,12 +1127,18 @@ async def callback_query(call):
 📌 **How It Works**
 ━━━━━━━━━━━━━━━━━━━━━━
 
-1. Get a key from the admin
-2. Use `/key` to register
-3. Use `/input` with your session URL
-4. Use `/scan` to start finding codes
-5. Found codes auto-save to `/result`
-6. Use `/recheck` to verify old codes
+1. Get authorized by the admin (@mgzan201)
+2. Use `/input` with your session URL
+3. Use `/scan` to start finding codes
+4. Found codes auto-save to `/result`
+5. Use `/recheck` to verify old codes
+"""
+        else:
+            help_text = """
+❌ **You are not authorized to use this bot!**
+
+Please contact the admin to get access:
+👤 Admin: @mgzan201
 """
         await bot.edit_message_text(
             help_text,
@@ -975,7 +1161,6 @@ async def callback_query(call):
                 1 for data in scan_tasks.values()
                 if not data["task"].done()
             )
-            approved_users = sum(1 for v in approve.values() if v)
             uptime_seconds = int(time.monotonic() - _start_time)
             hours, remainder = divmod(uptime_seconds, 3600)
             minutes, seconds = divmod(remainder, 60)
@@ -983,7 +1168,7 @@ async def callback_query(call):
                 f"📊 **Bot Status**\n\n"
                 f"⏱ Uptime: {hours}h {minutes}m {seconds}s\n"
                 f"🔍 Active Scans: {active_scans}\n"
-                f"✅ Approved Users: {approved_users}\n"
+                f"👥 Authorized Users: {len(authorized_users)}\n"
                 f"👥 Sessions Loaded: {len(user_data)}",
                 chat_id=chat_id,
                 message_id=message_id,
@@ -1056,6 +1241,25 @@ async def callback_query(call):
                 "🗑 **Delete Key**\n\n"
                 "Type: `/delkey <user_id>`\n\n"
                 "**Example:** `/delkey 123456789`",
+                chat_id=chat_id,
+                message_id=message_id,
+                parse_mode="Markdown",
+                reply_markup=admin_menu()
+            )
+        elif call.data == "admin_users":
+            auth_list, _ = await get_file_content("authorized_users.json")
+            github_users = auth_list.get("users", []) if auth_list else []
+            
+            lines = ["👥 **Authorized Users**\n"]
+            lines.append(f"Total: `{len(github_users)}` users\n")
+            
+            for uid in github_users:
+                is_admin = "👑 Admin" if uid == int(ADMIN_ID) else "✅ User"
+                lines.append(f"• `{uid}` - {is_admin}")
+            
+            text = "\n".join(lines)
+            await bot.edit_message_text(
+                text,
                 chat_id=chat_id,
                 message_id=message_id,
                 parse_mode="Markdown",
@@ -1173,7 +1377,6 @@ async def run_bruteforce(mode, chat_id, session_url, scan_id, message=None, prog
         return
     total = 10 ** int(mode) if mode in ["6", "7"] else None
     checked = 0
-    last_key_check = time.monotonic()
     scan_start = time.monotonic()
     global _voucher_sem
     if _voucher_sem is None:
@@ -1198,25 +1401,6 @@ async def run_bruteforce(mode, chat_id, session_url, scan_id, message=None, prog
                     break
             if not batch:
                 break
-
-            if time.monotonic() - last_key_check >= 600:
-                auth_list, _ = await get_file_content("auth_list.json")
-                if (
-                    str(chat_id) not in auth_list
-                    or not check_key_expiration(auth_list[str(chat_id)])
-                ):
-                    approve[chat_id] = False
-                    await bot.send_message(
-                        chat_id,
-                        "❌ **Your key has expired!**\n\n"
-                        "Please contact the admin for a new key.",
-                        parse_mode="Markdown"
-                    )
-                    scan_tasks.pop(chat_id, None)
-                    success_messages.pop(chat_id, None)
-                    success_texts.pop(chat_id, None)
-                    return
-                last_key_check = time.monotonic()
 
             async def _check(code):
                 async with _voucher_sem:
@@ -1608,6 +1792,8 @@ async def main():
         connector_owner=False
     )
     try:
+        # GitHub ကနေ authorized users စာရင်းကိုယူမယ်
+        await load_authorized_users()
         asyncio.create_task(web_server())
         asyncio.create_task(github_update_scheduler())
         await start_polling()

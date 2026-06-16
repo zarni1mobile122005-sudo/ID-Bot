@@ -1,4 +1,3 @@
-```python
 import telebot, asyncio, aiohttp, json, base64, random, re, os, string, time, uuid
 from telebot.async_telebot import AsyncTeleBot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -1618,4 +1617,3 @@ async def main():
 
 if __name__ == '__main__':
     asyncio.run(main())
-```
